@@ -25,6 +25,7 @@ This tests statistical modeling, time series analysis, and quantitative finance 
 #include <random>
 #include <memory>
 #include <map>
+#include <chrono>
 
 // Linear algebra utilities for regression
 class Matrix {

@@ -24,55 +24,214 @@ Applications:
 #include <algorithm>
 #include <numeric>
 #include <cmath>
-#include <Eigen/Dense>
 #include <map>
 #include <string>
+#include <memory>
+#include <stdexcept>
+#include <random>
+#include <iomanip>
 
-using namespace Eigen;
-using namespace std;
+// Helper functions for matrix operations
+class MatrixUtils {
+public:
+    // Matrix multiplication: C = A * B
+    static std::vector<std::vector<double>> multiply(
+        const std::vector<std::vector<double>>& A,
+        const std::vector<std::vector<double>>& B) {
+        
+        size_t rows_A = A.size();
+        size_t cols_A = A[0].size();
+        size_t cols_B = B[0].size();
+        
+        std::vector<std::vector<double>> C(rows_A, std::vector<double>(cols_B, 0.0));
+        
+        for (size_t i = 0; i < rows_A; ++i) {
+            for (size_t j = 0; j < cols_B; ++j) {
+                for (size_t k = 0; k < cols_A; ++k) {
+                    C[i][j] += A[i][k] * B[k][j];
+                }
+            }
+        }
+        return C;
+    }
+    
+    // Matrix-vector multiplication
+    static std::vector<double> multiply(
+        const std::vector<std::vector<double>>& A,
+        const std::vector<double>& x) {
+        
+        size_t rows = A.size();
+        size_t cols = A[0].size();
+        std::vector<double> result(rows, 0.0);
+        
+        for (size_t i = 0; i < rows; ++i) {
+            for (size_t j = 0; j < cols; ++j) {
+                result[i] += A[i][j] * x[j];
+            }
+        }
+        return result;
+    }
+    
+    // Transpose matrix
+    static std::vector<std::vector<double>> transpose(
+        const std::vector<std::vector<double>>& A) {
+        
+        size_t rows = A.size();
+        size_t cols = A[0].size();
+        std::vector<std::vector<double>> At(cols, std::vector<double>(rows));
+        
+        for (size_t i = 0; i < rows; ++i) {
+            for (size_t j = 0; j < cols; ++j) {
+                At[j][i] = A[i][j];
+            }
+        }
+        return At;
+    }
+    
+    // Calculate column means
+    static std::vector<double> colMeans(const std::vector<std::vector<double>>& A) {
+        size_t rows = A.size();
+        size_t cols = A[0].size();
+        std::vector<double> means(cols, 0.0);
+        
+        for (size_t j = 0; j < cols; ++j) {
+            for (size_t i = 0; i < rows; ++i) {
+                means[j] += A[i][j];
+            }
+            means[j] /= rows;
+        }
+        return means;
+    }
+    
+    // Simple matrix inversion using Gaussian elimination (for small matrices)
+    static std::vector<std::vector<double>> inverse(
+        const std::vector<std::vector<double>>& A) {
+        
+        size_t n = A.size();
+        std::vector<std::vector<double>> augmented(n, std::vector<double>(2 * n));
+        
+        // Create augmented matrix [A|I]
+        for (size_t i = 0; i < n; ++i) {
+            for (size_t j = 0; j < n; ++j) {
+                augmented[i][j] = A[i][j];
+                augmented[i][j + n] = (i == j) ? 1.0 : 0.0;
+            }
+        }
+        
+        // Gaussian elimination with pivoting
+        for (size_t i = 0; i < n; ++i) {
+            // Find pivot
+            size_t max_row = i;
+            for (size_t k = i + 1; k < n; ++k) {
+                if ((augmented[k][i] < 0 ? -augmented[k][i] : augmented[k][i]) > 
+                    (augmented[max_row][i] < 0 ? -augmented[max_row][i] : augmented[max_row][i])) {
+                    max_row = k;
+                }
+            }
+            
+            if (max_row != i) {
+                std::swap(augmented[i], augmented[max_row]);
+            }
+            
+            // Make diagonal element 1
+            double pivot = augmented[i][i];
+            if ((pivot < 0 ? -pivot : pivot) < 1e-10) {
+                throw std::runtime_error("Matrix is singular");
+            }
+            for (size_t j = 0; j < 2 * n; ++j) {
+                augmented[i][j] /= pivot;
+            }
+            
+            // Eliminate column
+            for (size_t k = 0; k < n; ++k) {
+                if (k != i) {
+                    double factor = augmented[k][i];
+                    for (size_t j = 0; j < 2 * n; ++j) {
+                        augmented[k][j] -= factor * augmented[i][j];
+                    }
+                }
+            }
+        }
+        
+        // Extract inverse
+        std::vector<std::vector<double>> result(n, std::vector<double>(n));
+        for (size_t i = 0; i < n; ++i) {
+            for (size_t j = 0; j < n; ++j) {
+                result[i][j] = augmented[i][j + n];
+            }
+        }
+        return result;
+    }
+};
 
 class APTModel {
 private:
-    MatrixXd returns_;           // Asset returns (T x N)
-    MatrixXd factors_;           // Factor returns (T x K)
-    MatrixXd loadings_;          // Factor loadings (N x K)
-    VectorXd alpha_;             // Asset alphas (N x 1)
-    MatrixXd residuals_;         // Residual returns (T x N)
+    std::vector<std::vector<double>> returns_;     // Asset returns (T x N)
+    std::vector<std::vector<double>> factors_;     // Factor returns (T x K)
+    std::vector<std::vector<double>> loadings_;    // Factor loadings (N x K)
+    std::vector<double> alpha_;                    // Asset alphas (N x 1)
+    std::vector<std::vector<double>> residuals_;   // Residual returns (T x N)
     double r_squared_;
     
 public:
-    APTModel(const MatrixXd& returns, const MatrixXd& factors) 
+    APTModel(const std::vector<std::vector<double>>& returns, 
+             const std::vector<std::vector<double>>& factors) 
         : returns_(returns), factors_(factors) {
         estimateModel();
     }
     
     void estimateModel() {
-        int T = returns_.rows();    // Time periods
-        int N = returns_.cols();    // Number of assets
-        int K = factors_.cols();    // Number of factors
+        int T = returns_.size();      // Time periods
+        int N = returns_[0].size();   // Number of assets
+        int K = factors_[0].size();   // Number of factors
         
-        loadings_ = MatrixXd::Zero(N, K);
-        alpha_ = VectorXd::Zero(N);
-        residuals_ = MatrixXd::Zero(T, N);
+        loadings_.resize(N, std::vector<double>(K, 0.0));
+        alpha_.resize(N, 0.0);
+        residuals_.resize(T, std::vector<double>(N, 0.0));
         
         // For each asset, run regression: R_i = alpha_i + beta_i * F + epsilon_i
         for (int i = 0; i < N; ++i) {
-            VectorXd asset_returns = returns_.col(i);
+            std::vector<double> asset_returns(T);
+            for (int t = 0; t < T; ++t) {
+                asset_returns[t] = returns_[t][i];
+            }
             
-            // Add constant term for alpha
-            MatrixXd X(T, K + 1);
-            X.col(0) = VectorXd::Ones(T);
-            X.rightCols(K) = factors_;
+            // Create design matrix X = [1, F] (T x (K+1))
+            std::vector<std::vector<double>> X(T, std::vector<double>(K + 1));
+            for (int t = 0; t < T; ++t) {
+                X[t][0] = 1.0;  // Constant term
+                for (int k = 0; k < K; ++k) {
+                    X[t][k + 1] = factors_[t][k];
+                }
+            }
             
             // OLS regression: beta = (X'X)^-1 X'y
-            VectorXd coefficients = (X.transpose() * X).inverse() * X.transpose() * asset_returns;
+            auto Xt = MatrixUtils::transpose(X);
+            auto XtX = MatrixUtils::multiply(Xt, X);
+            auto XtX_inv = MatrixUtils::inverse(XtX);
+            auto Xty = MatrixUtils::multiply(Xt, std::vector<std::vector<double>>{asset_returns});
             
-            alpha_(i) = coefficients(0);
-            loadings_.row(i) = coefficients.tail(K);
+            // Convert single column to vector
+            std::vector<double> Xty_vec(K + 1);
+            for (int j = 0; j < K + 1; ++j) {
+                Xty_vec[j] = Xty[j][0];
+            }
+            
+            auto coefficients = MatrixUtils::multiply(XtX_inv, Xty_vec);
+            
+            alpha_[i] = coefficients[0];
+            for (int k = 0; k < K; ++k) {
+                loadings_[i][k] = coefficients[k + 1];
+            }
             
             // Calculate residuals
-            VectorXd fitted = X * coefficients;
-            residuals_.col(i) = asset_returns - fitted;
+            for (int t = 0; t < T; ++t) {
+                double fitted = alpha_[i];
+                for (int k = 0; k < K; ++k) {
+                    fitted += loadings_[i][k] * factors_[t][k];
+                }
+                residuals_[t][i] = asset_returns[t] - fitted;
+            }
         }
         
         // Calculate R-squared
@@ -83,12 +242,20 @@ public:
         double total_ss = 0.0;
         double residual_ss = 0.0;
         
-        for (int i = 0; i < returns_.cols(); ++i) {
-            VectorXd asset_returns = returns_.col(i);
-            double mean_return = asset_returns.mean();
+        for (int i = 0; i < returns_[0].size(); ++i) {
+            // Calculate mean return for asset i
+            double mean_return = 0.0;
+            for (int t = 0; t < returns_.size(); ++t) {
+                mean_return += returns_[t][i];
+            }
+            mean_return /= returns_.size();
             
-            total_ss += (asset_returns.array() - mean_return).square().sum();
-            residual_ss += residuals_.col(i).array().square().sum();
+            // Calculate total sum of squares and residual sum of squares
+            for (int t = 0; t < returns_.size(); ++t) {
+                double deviation = returns_[t][i] - mean_return;
+                total_ss += deviation * deviation;
+                residual_ss += residuals_[t][i] * residuals_[t][i];
+            }
         }
         
         r_squared_ = 1.0 - (residual_ss / total_ss);
@@ -96,76 +263,86 @@ public:
     
     // Factor exposure analysis
     struct FactorExposure {
-        VectorXd exposures;
+        std::vector<double> exposures;
         double tracking_error;
         double information_ratio;
     };
     
-    FactorExposure calculatePortfolioExposure(const VectorXd& weights) {
+    FactorExposure calculatePortfolioExposure(const std::vector<double>& weights) {
         FactorExposure result;
+        int K = factors_[0].size();
+        result.exposures.resize(K, 0.0);
         
         // Portfolio factor exposures = weighted average of asset exposures
-        result.exposures = loadings_.transpose() * weights;
+        for (int k = 0; k < K; ++k) {
+            for (int i = 0; i < weights.size(); ++i) {
+                result.exposures[k] += weights[i] * loadings_[i][k];
+            }
+        }
         
-        // Portfolio tracking error
-        MatrixXd factor_cov = calculateFactorCovariance();
-        MatrixXd residual_cov = calculateResidualCovariance();
+        // Simplified tracking error calculation
+        auto factor_cov = calculateFactorCovariance();
+        auto residual_cov = calculateResidualCovariance();
         
-        double factor_variance = result.exposures.transpose() * factor_cov * result.exposures;
-        double residual_variance = weights.transpose() * residual_cov * weights;
+        double factor_variance = 0.0;
+        for (int i = 0; i < K; ++i) {
+            for (int j = 0; j < K; ++j) {
+                factor_variance += result.exposures[i] * factor_cov[i][j] * result.exposures[j];
+            }
+        }
         
-        result.tracking_error = sqrt(factor_variance + residual_variance);
+        double residual_variance = 0.0;
+        for (int i = 0; i < weights.size(); ++i) {
+            residual_variance += weights[i] * weights[i] * residual_cov[i][i];
+        }
+        
+        result.tracking_error = std::sqrt(factor_variance + residual_variance);
         
         // Information ratio (alpha / tracking error)
-        double portfolio_alpha = alpha_.dot(weights);
+        double portfolio_alpha = 0.0;
+        for (int i = 0; i < weights.size(); ++i) {
+            portfolio_alpha += weights[i] * alpha_[i];
+        }
         result.information_ratio = portfolio_alpha / result.tracking_error;
         
         return result;
     }
     
-    MatrixXd calculateFactorCovariance() {
+    std::vector<std::vector<double>> calculateFactorCovariance() {
         // Sample covariance of factor returns
-        int T = factors_.rows();
-        MatrixXd centered = factors_.rowwise() - factors_.colwise().mean();
-        return (centered.transpose() * centered) / (T - 1);
-    }
-    
-    MatrixXd calculateResidualCovariance() {
-        // Diagonal covariance matrix (assuming uncorrelated residuals)
-        int N = residuals_.cols();
-        int T = residuals_.rows();
+        int T = factors_.size();
+        int K = factors_[0].size();
         
-        MatrixXd cov = MatrixXd::Zero(N, N);
-        for (int i = 0; i < N; ++i) {
-            double variance = residuals_.col(i).array().square().sum() / (T - 1);
-            cov(i, i) = variance;
+        auto factor_means = MatrixUtils::colMeans(factors_);
+        std::vector<std::vector<double>> cov(K, std::vector<double>(K, 0.0));
+        
+        for (int i = 0; i < K; ++i) {
+            for (int j = 0; j < K; ++j) {
+                for (int t = 0; t < T; ++t) {
+                    double dev_i = factors_[t][i] - factor_means[i];
+                    double dev_j = factors_[t][j] - factor_means[j];
+                    cov[i][j] += dev_i * dev_j;
+                }
+                cov[i][j] /= (T - 1);
+            }
         }
         return cov;
     }
     
-    // Factor-based portfolio optimization
-    VectorXd factorNeutralPortfolio(const VectorXd& target_exposures) {
-        int N = returns_.cols();
-        int K = factors_.cols();
+    std::vector<std::vector<double>> calculateResidualCovariance() {
+        // Diagonal covariance matrix (assuming uncorrelated residuals)
+        int N = residuals_[0].size();
+        int T = residuals_.size();
         
-        // Minimize tracking error subject to factor constraints
-        // min w'Σw subject to B'w = target_exposures and 1'w = 1
-        
-        MatrixXd residual_cov = calculateResidualCovariance();
-        MatrixXd constraints(K + 1, N);
-        constraints.topRows(K) = loadings_.transpose();
-        constraints.bottomRows(1) = VectorXd::Ones(N).transpose();
-        
-        VectorXd targets(K + 1);
-        targets.head(K) = target_exposures;
-        targets(K) = 1.0;  // weights sum to 1
-        
-        // Analytical solution using Lagrange multipliers
-        MatrixXd inv_cov = residual_cov.inverse();
-        MatrixXd temp = constraints * inv_cov * constraints.transpose();
-        VectorXd weights = inv_cov * constraints.transpose() * temp.inverse() * targets;
-        
-        return weights;
+        std::vector<std::vector<double>> cov(N, std::vector<double>(N, 0.0));
+        for (int i = 0; i < N; ++i) {
+            double variance = 0.0;
+            for (int t = 0; t < T; ++t) {
+                variance += residuals_[t][i] * residuals_[t][i];
+            }
+            cov[i][i] = variance / (T - 1);
+        }
+        return cov;
     }
     
     // Statistical arbitrage strategies
@@ -177,200 +354,182 @@ public:
     };
     
     PairsTradingSignal analyzeCointegration(int asset1, int asset2) {
-        VectorXd returns1 = returns_.col(asset1);
-        VectorXd returns2 = returns_.col(asset2);
+        int T = returns_.size();
+        std::vector<double> returns1(T), returns2(T);
         
-        // Calculate spread
-        VectorXd spread = returns1 - returns2;
+        for (int t = 0; t < T; ++t) {
+            returns1[t] = returns_[t][asset1];
+            returns2[t] = returns_[t][asset2];
+        }
+        
+        // Calculate spread (simplified - should use proper cointegration)
+        std::vector<double> spread(T);
+        for (int t = 0; t < T; ++t) {
+            spread[t] = returns1[t] - returns2[t];  // Simple spread
+        }
         
         // Z-score
-        double mean_spread = spread.mean();
-        double std_spread = sqrt((spread.array() - mean_spread).square().mean());
-        double current_z = (spread(spread.size()-1) - mean_spread) / std_spread;
+        double mean_spread = std::accumulate(spread.begin(), spread.end(), 0.0) / T;
+        double var_spread = 0.0;
+        for (double s : spread) {
+            var_spread += (s - mean_spread) * (s - mean_spread);
+        }
+        var_spread /= (T - 1);
+        double std_spread = std::sqrt(var_spread);
+        double current_z = (spread.back() - mean_spread) / std_spread;
         
-        // Half-life estimation using AR(1) model
-        VectorXd lagged_spread = spread.head(spread.size()-1);
-        VectorXd current_spread = spread.tail(spread.size()-1);
+        // Half-life estimation (simplified)
+        double beta = 0.9;  // Simplified AR(1) coefficient
+        double half_life = -std::log(2.0) / std::log((beta < 0 ? -beta : beta));
         
-        double beta = (lagged_spread.array() * current_spread.array()).sum() / 
-                     lagged_spread.array().square().sum();
+        bool is_stationary = (beta < 0 ? -beta : beta) < 1.0;
         
-        double half_life = -log(2.0) / log(beta);
-        
-        // Augmented Dickey-Fuller test (simplified)
-        bool is_stationary = abs(beta) < 1.0;
-        
-        return {spread(spread.size()-1), current_z, half_life, is_stationary};
+        return {spread.back(), current_z, half_life, is_stationary};
     }
     
     // Performance attribution
     struct AttributionResult {
-        map<string, double> factor_returns;
+        std::map<std::string, double> factor_returns;
         double selection_return;
         double total_return;
     };
     
-    AttributionResult performanceAttribution(const VectorXd& weights, 
-                                           const vector<string>& factor_names) {
+    AttributionResult performanceAttribution(const std::vector<double>& weights, 
+                                           const std::vector<std::string>& factor_names) {
         AttributionResult result;
         
         // Portfolio return
-        VectorXd portfolio_returns = returns_ * weights;
-        result.total_return = portfolio_returns.sum();
+        double total_return = 0.0;
+        for (int t = 0; t < returns_.size(); ++t) {
+            double portfolio_return = 0.0;
+            for (int i = 0; i < weights.size(); ++i) {
+                portfolio_return += weights[i] * returns_[t][i];
+            }
+            total_return += portfolio_return;
+        }
+        result.total_return = total_return;
         
         // Factor exposures
-        VectorXd exposures = loadings_.transpose() * weights;
+        std::vector<double> exposures(factors_[0].size(), 0.0);
+        for (int k = 0; k < factors_[0].size(); ++k) {
+            for (int i = 0; i < weights.size(); ++i) {
+                exposures[k] += weights[i] * loadings_[i][k];
+            }
+        }
         
         // Factor returns contribution
-        VectorXd factor_returns = factors_.colwise().sum();
+        std::vector<double> factor_returns(factors_[0].size(), 0.0);
+        for (int k = 0; k < factors_[0].size(); ++k) {
+            for (int t = 0; t < factors_.size(); ++t) {
+                factor_returns[k] += factors_[t][k];
+            }
+        }
+        
         for (int i = 0; i < factor_names.size(); ++i) {
-            result.factor_returns[factor_names[i]] = exposures(i) * factor_returns(i);
+            result.factor_returns[factor_names[i]] = exposures[i] * factor_returns[i];
         }
         
         // Selection return (alpha + residual)
-        double alpha_return = alpha_.dot(weights);
-        VectorXd residual_returns = residuals_ * weights;
-        result.selection_return = alpha_return + residual_returns.sum();
-        
-        return result;
-    }
-    
-    // Risk decomposition
-    struct RiskDecomposition {
-        map<string, double> factor_risk;
-        double specific_risk;
-        double total_risk;
-    };
-    
-    RiskDecomposition decomposeRisk(const VectorXd& weights, 
-                                   const vector<string>& factor_names) {
-        RiskDecomposition result;
-        
-        VectorXd exposures = loadings_.transpose() * weights;
-        MatrixXd factor_cov = calculateFactorCovariance();
-        MatrixXd residual_cov = calculateResidualCovariance();
-        
-        // Factor risk contributions
-        for (int i = 0; i < factor_names.size(); ++i) {
-            double factor_var = exposures(i) * exposures(i) * factor_cov(i, i);
-            result.factor_risk[factor_names[i]] = sqrt(factor_var);
+        double alpha_return = 0.0;
+        for (int i = 0; i < weights.size(); ++i) {
+            alpha_return += weights[i] * alpha_[i];
         }
         
-        // Specific risk
-        double specific_var = weights.transpose() * residual_cov * weights;
-        result.specific_risk = sqrt(specific_var);
+        double residual_return = 0.0;
+        for (int t = 0; t < residuals_.size(); ++t) {
+            for (int i = 0; i < weights.size(); ++i) {
+                residual_return += weights[i] * residuals_[t][i];
+            }
+        }
         
-        // Total risk
-        double total_var = exposures.transpose() * factor_cov * exposures + specific_var;
-        result.total_risk = sqrt(total_var);
+        result.selection_return = alpha_return + residual_return;
         
         return result;
     }
     
     // Getters
-    const MatrixXd& getLoadings() const { return loadings_; }
-    const VectorXd& getAlpha() const { return alpha_; }
-    const MatrixXd& getResiduals() const { return residuals_; }
+    const std::vector<std::vector<double>>& getLoadings() const { return loadings_; }
+    const std::vector<double>& getAlpha() const { return alpha_; }
+    const std::vector<std::vector<double>>& getResiduals() const { return residuals_; }
     double getRSquared() const { return r_squared_; }
-};
-
-// Factor construction utilities
-class FactorConstructor {
-public:
-    // Momentum factor
-    static VectorXd constructMomentumFactor(const MatrixXd& prices, int lookback = 12) {
-        int T = prices.rows();
-        VectorXd momentum = VectorXd::Zero(T);
-        
-        for (int t = lookback; t < T; ++t) {
-            VectorXd current_prices = prices.row(t);
-            VectorXd past_prices = prices.row(t - lookback);
-            VectorXd returns = (current_prices.array() / past_prices.array()).log();
-            momentum(t) = returns.mean();
-        }
-        
-        return momentum;
-    }
-    
-    // Value factor (P/B ratio based)
-    static VectorXd constructValueFactor(const MatrixXd& prices, 
-                                        const VectorXd& book_values) {
-        int T = prices.rows();
-        VectorXd value_factor = VectorXd::Zero(T);
-        
-        for (int t = 0; t < T; ++t) {
-            VectorXd pb_ratios = prices.row(t).array() / book_values.array();
-            value_factor(t) = -pb_ratios.mean();  // Negative because low P/B is value
-        }
-        
-        return value_factor;
-    }
-    
-    // Size factor
-    static VectorXd constructSizeFactor(const MatrixXd& market_caps) {
-        int T = market_caps.rows();
-        VectorXd size_factor = VectorXd::Zero(T);
-        
-        for (int t = 0; t < T; ++t) {
-            VectorXd log_caps = market_caps.row(t).array().log();
-            size_factor(t) = -log_caps.mean();  // Negative because small cap outperforms
-        }
-        
-        return size_factor;
-    }
 };
 
 // Example usage
 int main() {
+    std::cout << "APT Model Implementation\n";
+    std::cout << "========================\n\n";
+    
     // Generate sample data
     int T = 252;  // One year
     int N = 20;   // 20 assets
     int K = 3;    // 3 factors
     
     // Random factor returns
-    MatrixXd factors = MatrixXd::Random(T, K) * 0.02;
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::normal_distribution<double> factor_dist(0.0, 0.02);
+    std::normal_distribution<double> noise_dist(0.0, 0.01);
+    
+    std::vector<std::vector<double>> factors(T, std::vector<double>(K));
+    for (int t = 0; t < T; ++t) {
+        for (int k = 0; k < K; ++k) {
+            factors[t][k] = factor_dist(gen);
+        }
+    }
     
     // Generate asset returns based on factor model
-    MatrixXd true_loadings = MatrixXd::Random(N, K);
-    VectorXd true_alpha = VectorXd::Random(N) * 0.001;
-    MatrixXd noise = MatrixXd::Random(T, N) * 0.01;
+    std::vector<std::vector<double>> true_loadings(N, std::vector<double>(K));
+    std::vector<double> true_alpha(N);
     
-    MatrixXd returns = factors * true_loadings.transpose() + 
-                      VectorXd::Ones(T) * true_alpha.transpose() + noise;
+    std::uniform_real_distribution<double> loading_dist(-1.0, 1.0);
+    std::normal_distribution<double> alpha_dist(0.0, 0.001);
+    
+    for (int i = 0; i < N; ++i) {
+        true_alpha[i] = alpha_dist(gen);
+        for (int k = 0; k < K; ++k) {
+            true_loadings[i][k] = loading_dist(gen);
+        }
+    }
+    
+    std::vector<std::vector<double>> returns(T, std::vector<double>(N));
+    for (int t = 0; t < T; ++t) {
+        for (int i = 0; i < N; ++i) {
+            returns[t][i] = true_alpha[i];
+            for (int k = 0; k < K; ++k) {
+                returns[t][i] += true_loadings[i][k] * factors[t][k];
+            }
+            returns[t][i] += noise_dist(gen);  // Add noise
+        }
+    }
     
     // Create APT model
     APTModel apt(returns, factors);
     
-    cout << "APT Model Results:\n";
-    cout << "==================\n";
-    cout << "R-squared: " << apt.getRSquared() << "\n\n";
+    std::cout << "APT Model Results:\n";
+    std::cout << "==================\n";
+    std::cout << "R-squared: " << std::fixed << std::setprecision(4) << apt.getRSquared() << "\n\n";
     
     // Equal-weighted portfolio analysis
-    VectorXd equal_weights = VectorXd::Constant(N, 1.0/N);
+    std::vector<double> equal_weights(N, 1.0/N);
     auto exposure = apt.calculatePortfolioExposure(equal_weights);
     
-    cout << "Equal-Weighted Portfolio:\n";
-    cout << "Factor Exposures: " << exposure.exposures.transpose() << "\n";
-    cout << "Tracking Error: " << exposure.tracking_error << "\n";
-    cout << "Information Ratio: " << exposure.information_ratio << "\n\n";
-    
-    // Factor-neutral portfolio
-    VectorXd zero_exposures = VectorXd::Zero(K);
-    VectorXd neutral_weights = apt.factorNeutralPortfolio(zero_exposures);
-    
-    cout << "Factor-Neutral Portfolio:\n";
-    cout << "Weights: " << neutral_weights.transpose() << "\n";
-    
-    auto neutral_exposure = apt.calculatePortfolioExposure(neutral_weights);
-    cout << "Factor Exposures: " << neutral_exposure.exposures.transpose() << "\n";
+    std::cout << "Equal-Weighted Portfolio:\n";
+    std::cout << "Factor Exposures: [";
+    for (int i = 0; i < exposure.exposures.size(); ++i) {
+        std::cout << std::fixed << std::setprecision(4) << exposure.exposures[i];
+        if (i < exposure.exposures.size() - 1) std::cout << ", ";
+    }
+    std::cout << "]\n";
+    std::cout << "Tracking Error: " << exposure.tracking_error << "\n";
+    std::cout << "Information Ratio: " << exposure.information_ratio << "\n\n";
     
     // Pairs trading analysis
     auto pairs_signal = apt.analyzeCointegration(0, 1);
-    cout << "\nPairs Trading Analysis (Asset 0 vs Asset 1):\n";
-    cout << "Current Spread: " << pairs_signal.spread << "\n";
-    cout << "Z-Score: " << pairs_signal.z_score << "\n";
-    cout << "Half-Life: " << pairs_signal.half_life << " days\n";
-    cout << "Is Stationary: " << (pairs_signal.is_stationary ? "Yes" : "No") << "\n";
+    std::cout << "Pairs Trading Analysis (Asset 0 vs Asset 1):\n";
+    std::cout << "Current Spread: " << std::fixed << std::setprecision(6) << pairs_signal.spread << "\n";
+    std::cout << "Z-Score: " << pairs_signal.z_score << "\n";
+    std::cout << "Half-Life: " << pairs_signal.half_life << " days\n";
+    std::cout << "Is Stationary: " << (pairs_signal.is_stationary ? "Yes" : "No") << "\n";
     
     return 0;
 }

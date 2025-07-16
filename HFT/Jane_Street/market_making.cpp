@@ -156,7 +156,8 @@ private:
         double weighted_sum = 0.0;
         double total_weight = 0.0;
         
-        for (size_t i = 0; i < std::min(external_prices.size(), weights.size()); ++i) {
+        size_t loop_size = (external_prices.size() < weights.size()) ? external_prices.size() : weights.size();
+        for (size_t i = 0; i < loop_size; ++i) {
             if (external_prices[i].volume > 0) {  // Valid price
                 weighted_sum += external_prices[i].price * weights[i];
                 total_weight += weights[i];
@@ -214,14 +215,14 @@ public:
             return Quote(0.0, 0.0, 0, 0);
         }
         
-        // Calculate base spread based on volatility
-        double base_spread = std::max(risk_params.min_spread, 
-                                    std::min(risk_params.max_spread, 
-                                           base_spread_factor * volatility));
+        double min_spread = (risk_params.max_spread < base_spread_factor * volatility) ? 
+                           risk_params.max_spread : base_spread_factor * volatility;
+        double base_spread = (risk_params.min_spread > min_spread) ? risk_params.min_spread : min_spread;
         
         // Adjust spread based on inventory
         double inventory_ratio = static_cast<double>(position) / risk_params.max_position;
-        double spread_adjustment = 1.0 + std::abs(inventory_ratio) * risk_params.inventory_penalty;
+        double abs_inventory_ratio = (inventory_ratio < 0) ? -inventory_ratio : inventory_ratio;
+        double spread_adjustment = 1.0 + abs_inventory_ratio * risk_params.inventory_penalty;
         double adjusted_spread = base_spread * spread_adjustment;
         
         // Calculate skew based on inventory (skew quotes away from inventory)
@@ -276,10 +277,13 @@ public:
             remaining_capacity = position + risk_params.max_position;
         }
         
-        uint64_t max_size = std::min(default_size, static_cast<uint64_t>(remaining_capacity));
+        int64_t safe_capacity = (remaining_capacity > 0) ? remaining_capacity : 0;
+        uint64_t capacity_uint = static_cast<uint64_t>(safe_capacity);
+        uint64_t max_size = (default_size < capacity_uint) ? default_size : capacity_uint;
         
         // Further reduce size based on inventory
-        double inventory_factor = 1.0 - std::abs(static_cast<double>(position)) / risk_params.max_position;
+        double abs_position = (position < 0) ? -static_cast<double>(position) : static_cast<double>(position);
+        double inventory_factor = 1.0 - abs_position / risk_params.max_position;
         
         return static_cast<uint64_t>(max_size * inventory_factor);
     }
@@ -287,7 +291,8 @@ public:
     // Risk management
     void check_risk_limits() {
         // Position limit check
-        if (std::abs(position) > risk_params.max_position) {
+        int64_t abs_position = (position < 0) ? -position : position;
+        if (abs_position > risk_params.max_position) {
             std::cout << "WARNING: Position limit exceeded! Position: " << position << std::endl;
         }
         
@@ -424,9 +429,11 @@ int main() {
         if (simulator.simulate_order_arrival() && quote.bid_price > 0) {
             bool hit_bid = simulator.simulate_side_selection();
             if (hit_bid && quote.bid_size > 0) {
-                mm.handle_fill(true, quote.bid_price, std::min(quote.bid_size, 50UL));
+                uint64_t fill_size = (quote.bid_size < 50) ? quote.bid_size : 50;
+                mm.handle_fill(true, quote.bid_price, fill_size);
             } else if (!hit_bid && quote.ask_size > 0) {
-                mm.handle_fill(false, quote.ask_price, std::min(quote.ask_size, 50UL));
+                uint64_t fill_size = (quote.ask_size < 50) ? quote.ask_size : 50;
+                mm.handle_fill(false, quote.ask_price, fill_size);
             }
         }
         
