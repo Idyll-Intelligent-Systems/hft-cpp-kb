@@ -44,6 +44,11 @@ Company-specific coding questions and implementations:
 #### [Jump Trading/](./HFT/Jump_Trading/)
 - **[Low-Latency Arbitrage](./HFT/Jump_Trading/latency_arbitrage.cpp)** - Sub-microsecond arbitrage detection with cache-aligned data structures and lock-free programming
 
+#### [Plutus/](./HFT/Plutus/)
+- **[Connecting the Special Nodes](./HFT/Plutus/q5.md)**
+- **[XOR Queries on Tree](./HFT/Plutus/q6.md)**
+- **[Division Nodes](./HFT/Plutus/q7.md)**
+
 ## 🎯 Difficulty Levels
 
 ### Medium Level Problems
